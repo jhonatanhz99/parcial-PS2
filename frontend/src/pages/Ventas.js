@@ -12,19 +12,18 @@ function Ventas() {
   const [administradores, setAdministradores] = useState([]);
   const [form, setForm] = useState({
     id_cliente: "",
-    id_producto: "",
-    cantidad_vendida: 1,
-    precio_unitario: "",
     metodo_pago: "Efectivo",
-    id_usuario: ""
+    id_usuario: "",
+    tipo_usuario: "usuario"
   });
-  const [descripcionProducto, setDescripcionProducto] = useState("");
-  const [totalVenta, setTotalVenta] = useState(0);
-  const [busquedaProducto, setBusquedaProducto] = useState("");
+  const [cartItems, setCartItems] = useState([
+    { id_producto: "", cantidad: 1, precio_unitario: 0, buscar: "" }
+  ]);
   const [mostrarStock, setMostrarStock] = useState(false);
   const [ultimaVenta, setUltimaVenta] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [serverError, setServerError] = useState(null);
 
-  // Cargar datos
   useEffect(() => {
     fetch("http://localhost:3000/api/ventas")
       .then(res => res.json())
@@ -48,70 +47,102 @@ function Ventas() {
       .catch(() => setAdministradores([]));
   }, []);
 
-  // Actualizar descripción y precio unitario al seleccionar producto
-  useEffect(() => {
-    const prod = productos.find(p => p.id_producto === Number(form.id_producto));
-    if (prod) {
-      setDescripcionProducto(prod.descripcion || "");
-      setForm(f => ({
-        ...f,
-        precio_unitario: prod.precio_venta
-      }));
-    } else {
-      setDescripcionProducto("");
-      setForm(f => ({
-        ...f,
-        precio_unitario: ""
-      }));
-    }
-  }, [form.id_producto, productos]);
-
-  // Actualizar total al cambiar cantidad o precio unitario
-  useEffect(() => {
-    const cantidad = Number(form.cantidad_vendida) || 0;
-    const precio = Number(form.precio_unitario) || 0;
-    setTotalVenta(cantidad * precio);
-  }, [form.cantidad_vendida, form.precio_unitario]);
-
-  // Unir usuarios y administradores para el select
   const opcionesUsuarios = [
-    ...usuarios.map(u => ({
-      id: u.id_usuario,
-      nombre: u.nombre_usuario,
-      tipo: "usuario"
-    })),
-    ...administradores.map(a => ({
-      id: a.id,
-      nombre: a.usuario,
-      tipo: "administrador"
-    }))
+    ...usuarios.map(u => ({ id: u.id_usuario, nombre: u.nombre_usuario, tipo: "usuario" })),
+    ...administradores.map(a => ({ id: a.id, nombre: a.usuario, tipo: "administrador" }))
   ];
 
-  // Registrar venta y refrescar productos/ventas
+  const addItem = () => {
+    setCartItems(prev => [...prev, { id_producto: "", cantidad: 1, precio_unitario: 0 }]);
+  };
+
+  const removeItem = (index) => {
+    setCartItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const updateItem = (index, field, value) => {
+    setCartItems(prev => {
+      const copy = [...prev];
+      // normalizar para cantidad/precio como números cuando se usan
+      if (field === 'cantidad') value = value === '' ? '' : Number(value);
+      if (field === 'precio_unitario') value = value === '' ? '' : Number(value);
+      copy[index] = { ...copy[index], [field]: value };
+      // Si se seleccionó producto, autocompletar precio
+      if (field === 'id_producto') {
+        const prod = productos.find(p => p.id_producto === Number(value));
+        if (prod) copy[index].precio_unitario = prod.precio_venta || 0;
+      }
+      return copy;
+    });
+  };
+
+  const totalVenta = cartItems.reduce((s, it) => s + (Number(it.cantidad || 0) * Number(it.precio_unitario || 0)), 0);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+
     const adminDefault = administradores[0];
     const usuarioSeleccionado = form.id_usuario || (adminDefault ? adminDefault.id : "");
 
-    const ventaData = {
-      ...form,
-      cantidad_vendida: Number(form.cantidad_vendida), // <-- asegúrate que es número
+    // Preparar payload
+    // Validaciones cliente-side
+    for (let i = 0; i < cartItems.length; i++) {
+      const it = cartItems[i];
+      if (!it.id_producto) {
+        alert(`Seleccione un producto en la fila ${i + 1}`);
+        return;
+      }
+      if (!it.cantidad || Number(it.cantidad) <= 0) {
+        alert(`Cantidad inválida en la fila ${i + 1}`);
+        return;
+      }
+    }
+
+    const payload = {
+      id_cliente: form.id_cliente === "" ? null : form.id_cliente,
+      metodo_pago: form.metodo_pago,
       id_usuario: usuarioSeleccionado,
-      id_cliente: form.id_cliente === "" ? null : form.id_cliente
+      tipo_usuario: form.tipo_usuario || "usuario",
+      items: cartItems.map(it => ({ id_producto: Number(it.id_producto), cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario) }))
     };
 
-    // Registrar venta
-    const ventaRes = await fetch("http://localhost:3000/api/ventas", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(ventaData),
-    });
+    setLoading(true);
+    setServerError(null);
     let ventaCreada = null;
     try {
-      ventaCreada = await ventaRes.json();
-      setUltimaVenta(ventaCreada);
-    } catch {
+      const ventaRes = await fetch("http://localhost:3000/api/ventas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await ventaRes.json();
+      if (!ventaRes.ok) {
+        setServerError(json.error || 'Error al registrar la venta');
+        setLoading(false);
+        return;
+      }
+      // Si el backend devuelve id_venta, pedir la venta completa con detalles
+      if (json.id_venta) {
+        try {
+          const r = await fetch(`http://localhost:3000/api/ventas/${json.id_venta}`);
+          if (r.ok) {
+            const full = await r.json();
+            setUltimaVenta(full);
+          } else {
+            setUltimaVenta(json);
+          }
+        } catch (e) {
+          setUltimaVenta(json);
+        }
+      } else {
+        setUltimaVenta(json);
+      }
+    } catch (err) {
+      console.error(err);
+      setServerError('Respuesta inválida del servidor');
       setUltimaVenta(null);
+      setLoading(false);
+      return;
     }
 
     // Refrescar productos y ventas
@@ -124,254 +155,178 @@ function Ventas() {
       .then(data => setVentas(Array.isArray(data) ? data : []))
       .catch(() => setVentas([]));
 
-    setForm({
-      id_cliente: "",
-      id_producto: "",
-      cantidad_vendida: 1,
-      precio_unitario: "",
-      metodo_pago: "Efectivo",
-      id_usuario: ""
-    });
-    setDescripcionProducto("");
-    setTotalVenta(0);
+    // reset
+    setForm({ id_cliente: "", metodo_pago: "Efectivo", id_usuario: "", tipo_usuario: "usuario" });
+    setCartItems([{ id_producto: "", cantidad: 1, precio_unitario: 0, buscar: "" }]);
+    setLoading(false);
   };
 
-  // Exportar a Excel solo la última venta
   const exportarExcel = () => {
     if (!ultimaVenta) return;
-    const ws = XLSX.utils.json_to_sheet([{
-      "ID": ultimaVenta.id_venta,
-      "Fecha": ultimaVenta.fecha_venta?.substring(0, 19).replace("T", " "),
-      "Cliente": ultimaVenta.primer_nombre ? `${ultimaVenta.primer_nombre} ${ultimaVenta.primer_apellido}` : "Genérico",
-      "Producto": ultimaVenta.producto,
-      "Cantidad": ultimaVenta.cantidad_vendida,
-      "Precio unitario": ultimaVenta.precio_unitario,
-      "Total": ultimaVenta.total_venta,
-      "Método pago": ultimaVenta.metodo_pago,
-      "Usuario": ultimaVenta.usuario
-    }]);
+    const rows = (ultimaVenta.items || []).map(it => ({
+      ID: ultimaVenta.id_venta,
+      Producto: productos.find(p => p.id_producto === Number(it.id_producto))?.nombre || it.id_producto,
+      Cantidad: it.cantidad,
+      'Precio unitario': it.precio_unitario,
+      Subtotal: it.cantidad * it.precio_unitario
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Venta");
     const excelBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    saveAs(new Blob([excelBuffer], { type: "application/octet-stream" }), "venta.xlsx");
+    saveAs(new Blob([excelBuffer], { type: "application/octet-stream" }), `venta_${ultimaVenta.id_venta || 'nuevo'}.xlsx`);
   };
 
-  // Exportar a PDF solo la última venta
   const exportarPDF = () => {
     if (!ultimaVenta) return;
     const doc = new jsPDF({ orientation: "landscape" });
     doc.text("Venta registrada", 14, 10);
-    autoTable(doc, {
-      head: [[
-        "ID", "Fecha", "Cliente", "Producto", "Cantidad", "Precio unitario", "Total", "Método pago", "Usuario"
-      ]],
-      body: [[
-        ultimaVenta.id_venta,
-        ultimaVenta.fecha_venta?.substring(0, 19).replace("T", " "),
-        ultimaVenta.primer_nombre ? `${ultimaVenta.primer_nombre} ${ultimaVenta.primer_apellido}` : "Genérico",
-        ultimaVenta.producto,
-        ultimaVenta.cantidad_vendida,
-        ultimaVenta.precio_unitario,
-        ultimaVenta.total_venta,
-        ultimaVenta.metodo_pago,
-        ultimaVenta.usuario
-      ]],
-      styles: { fontSize: 8 },
-      margin: { top: 16 },
-    });
-    doc.save("venta.pdf");
+    const head = [["Producto", "Cantidad", "Precio unitario", "Subtotal"]];
+    const body = (ultimaVenta.items || []).map(it => [
+      productos.find(p => p.id_producto === Number(it.id_producto))?.nombre || it.id_producto,
+      it.cantidad,
+      it.precio_unitario,
+      it.cantidad * it.precio_unitario
+    ]);
+    autoTable(doc, { head, body, margin: { top: 16 } });
+    doc.save(`venta_${ultimaVenta.id_venta || 'nuevo'}.pdf`);
   };
 
   return (
     <div style={{ marginLeft: 220, padding: 20 }}>
       <h2>Registrar Venta</h2>
-      <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
-        <select
-          value={form.id_cliente}
-          onChange={e => setForm(f => ({ ...f, id_cliente: e.target.value }))}
-          style={{ cursor: "pointer" }}
-        >
-          <option value="">Cliente Genérico</option>
-          {clientes.map(c => (
-            <option key={c.id_cliente} value={c.id_cliente}>
-              {c.primer_nombre} {c.primer_apellido}
-            </option>
-          ))}
-        </select>
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          <input
-            type="text"
-            placeholder="Buscar producto..."
-            value={busquedaProducto}
-            onChange={e => setBusquedaProducto(e.target.value)}
-            style={{
-              marginBottom: 4,
-              padding: 6,
-              borderRadius: 4,
-              border: "1px solid #ccc",
-              cursor: "text"
-            }}
-          />
-          <select
-            value={form.id_producto}
-            onChange={e => setForm(f => ({ ...f, id_producto: e.target.value }))}
-            style={{ cursor: "pointer" }}
-          >
-            <option value="">Producto</option>
-            {productos
-              .filter(p =>
-                (p.nombre + " " + p.descripcion)
-                  .toLowerCase()
-                  .includes(busquedaProducto.toLowerCase())
-              )
-              .map(p => (
-                <option key={p.id_producto} value={p.id_producto}>
-                  {p.nombre} - {p.descripcion}
-                </option>
-              ))}
+      <form onSubmit={handleSubmit} style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={form.id_cliente} onChange={e => setForm(f => ({ ...f, id_cliente: e.target.value }))}>
+            <option value="">Cliente Genérico</option>
+            {clientes.map(c => (
+              <option key={c.id_cliente} value={c.id_cliente}>{c.primer_nombre} {c.primer_apellido}</option>
+            ))}
           </select>
-          {descripcionProducto && (
-            <span style={{
-              fontSize: 13,
-              color: "#007bff",
-              marginTop: 2,
-              maxWidth: 200,
-              whiteSpace: "pre-line"
-            }}>
-              {descripcionProducto}
-            </span>
-          )}
-        </div>
-        <input
-          type="number"
-          placeholder="Cantidad"
-          value={form.cantidad_vendida}
-          min="1"
-          onChange={e => setForm(f => ({ ...f, cantidad_vendida: e.target.value }))}
-          required
-          style={{ cursor: "text" }}
-        />
-        <input
-          type="number"
-          placeholder="Precio unitario"
-          value={form.precio_unitario}
-          onChange={e => setForm(f => ({ ...f, precio_unitario: e.target.value }))}
-          required
-          style={{ cursor: "text" }}
-        />
-        <input
-          type="number"
-          placeholder="Total"
-          value={totalVenta}
-          readOnly
-          style={{ background: "#f0f0f0", fontWeight: "bold", cursor: "text" }}
-        />
-        <select
-          value={form.metodo_pago}
-          onChange={e => setForm(f => ({ ...f, metodo_pago: e.target.value }))}
-          style={{ cursor: "pointer" }}
-        >
-          <option value="Efectivo">Efectivo</option>
-          <option value="Tarjeta">Tarjeta</option>
-          <option value="Transferencia">Transferencia</option>
-        </select>
-        <select
-          value={form.id_usuario}
-          onChange={e => {
+
+          <select value={form.metodo_pago} onChange={e => setForm(f => ({ ...f, metodo_pago: e.target.value }))}>
+            <option value="Efectivo">Efectivo</option>
+            <option value="Tarjeta">Tarjeta</option>
+            <option value="Transferencia">Transferencia</option>
+          </select>
+
+          <select value={form.id_usuario} onChange={e => {
             const selected = opcionesUsuarios.find(u => u.id.toString() === e.target.value);
-            setForm(f => ({
-              ...f,
-              id_usuario: selected ? selected.id : "",
-              tipo_usuario: selected ? selected.tipo : "usuario"
-            }));
-          }}
-          required
-          style={{ cursor: "pointer" }}
-        >
-          <option value="">Usuario/Administrador</option>
-          {opcionesUsuarios.map(u => (
-            <option key={u.tipo + "-" + u.id} value={u.id}>
-              {u.nombre} ({u.tipo})
-            </option>
-          ))}
-        </select>
-        <button
-          type="submit"
-          style={{
-            padding: "12px 28px",
-            background: "linear-gradient(90deg, #007bff 0%, #00e1ff 100%)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: "bold",
-            fontSize: 18,
-            boxShadow: "0 2px 8px #0002",
-            cursor: "pointer",
-            transition: "background 0.2s, transform 0.2s",
-            marginTop: 4
-          }}
-          onMouseOver={e => e.currentTarget.style.transform = "scale(1.05)"}
-          onMouseOut={e => e.currentTarget.style.transform = "scale(1)"}
-        >
-          Registrar
-        </button>
+            setForm(f => ({ ...f, id_usuario: selected ? selected.id : '', tipo_usuario: selected ? selected.tipo : 'usuario' }));
+          }} required>
+            <option value="">Usuario/Administrador</option>
+            {opcionesUsuarios.map(u => (
+              <option key={u.tipo + '-' + u.id} value={u.id}>{u.nombre} ({u.tipo})</option>
+            ))}
+          </select>
+
+          <button type="button" onClick={addItem} style={{ padding: 8 }}>Añadir producto</button>
+          <button type="submit" disabled={loading} style={{ padding: 10, background: '#007bff', color: '#fff', border: 'none', borderRadius: 6, opacity: loading ? 0.6 : 1 }}>{loading ? 'Registrando...' : 'Registrar'}</button>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <table border="1" cellPadding="6" style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cantidad</th>
+                <th>Precio unitario</th>
+                <th>Subtotal</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cartItems.map((it, idx) => (
+                <tr key={idx}>
+                  <td>
+                    <input type="text" placeholder="Buscar producto..." value={it.buscar || ''} onChange={e => updateItem(idx, 'buscar', e.target.value)} style={{ marginBottom: 4 }} />
+                    <select value={it.id_producto} onChange={e => updateItem(idx, 'id_producto', e.target.value)}>
+                      <option value="">Producto</option>
+                      {productos.filter(p => (p.nombre + ' ' + p.descripcion).toLowerCase().includes((it.buscar || '').toLowerCase())).map(p => (
+                        <option key={p.id_producto} value={p.id_producto}>{p.nombre} - {p.descripcion}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <input type="number" min="1" value={it.cantidad} onChange={e => updateItem(idx, 'cantidad', e.target.value)} />
+                  </td>
+                  <td>
+                    <input type="number" value={it.precio_unitario} onChange={e => updateItem(idx, 'precio_unitario', e.target.value)} />
+                  </td>
+                  <td>{(Number(it.cantidad) * Number(it.precio_unitario)).toFixed(2)}</td>
+                  <td>
+                    <button type="button" onClick={() => removeItem(idx)}>Quitar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div style={{ marginTop: 12, textAlign: 'right', fontWeight: 'bold' }}>
+            Total: {totalVenta.toFixed(2)}
+          </div>
+        </div>
       </form>
+
       <div style={{ marginBottom: 16 }}>
-        <button
-          onClick={exportarExcel}
-          disabled={!ultimaVenta}
-          style={{
-            padding: "10px 24px",
-            background: "#43a047",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: "bold",
-            fontSize: 16,
-            marginRight: 8,
-            cursor: !ultimaVenta ? "not-allowed" : "pointer",
-            opacity: !ultimaVenta ? 0.6 : 1,
-            transition: "background 0.2s, transform 0.2s"
-          }}
-        >
-          Exportar Excel
-        </button>
-        <button
-          onClick={exportarPDF}
-          disabled={!ultimaVenta}
-          style={{
-            padding: "10px 24px",
-            background: "#e53935",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: "bold",
-            fontSize: 16,
-            cursor: !ultimaVenta ? "not-allowed" : "pointer",
-            opacity: !ultimaVenta ? 0.6 : 1,
-            transition: "background 0.2s, transform 0.2s"
-          }}
-        >
-          Exportar PDF
-        </button>
-        <button
-          onClick={() => setMostrarStock(v => !v)}
-          style={{
-            padding: "10px 24px",
-            background: "#007bff",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: "bold",
-            fontSize: 16,
-            marginLeft: 8,
-            cursor: "pointer",
-            transition: "background 0.2s, transform 0.2s"
-          }}
-        >
-          {mostrarStock ? "Ocultar Stock" : "Mostrar Stock"}
-        </button>
+        <button onClick={exportarExcel} disabled={!ultimaVenta} style={{ padding: '10px 24px', marginRight: 8 }}>Exportar Excel</button>
+        <button onClick={exportarPDF} disabled={!ultimaVenta} style={{ padding: '10px 24px' }}>Exportar PDF</button>
+        <button onClick={() => setMostrarStock(v => !v)} style={{ padding: '10px 24px', marginLeft: 8 }}>{mostrarStock ? 'Ocultar Stock' : 'Mostrar Stock'}</button>
       </div>
+
+      {serverError && (
+        <div style={{ color: 'red', marginBottom: 12 }}>
+          {serverError}
+        </div>
+      )}
+
+      {/* Mostrar factura/última venta con detalle */}
+      {ultimaVenta && (
+        <div style={{ marginTop: 16, padding: 12, border: '1px solid #eee', background: '#fafafa' }}>
+          <h3>Venta registrada: {ultimaVenta.venta ? ultimaVenta.venta.id_venta : (ultimaVenta.id_venta || '')}</h3>
+          <div>Cliente: {ultimaVenta.venta ? (ultimaVenta.venta.primer_nombre ? `${ultimaVenta.venta.primer_nombre} ${ultimaVenta.venta.primer_apellido}` : 'Genérico') : (ultimaVenta.primer_nombre ? `${ultimaVenta.primer_nombre} ${ultimaVenta.primer_apellido}` : 'Genérico')}</div>
+          <table border="1" cellPadding="6" style={{ marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cantidad</th>
+                <th>Precio unitario</th>
+                <th>Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(
+                ultimaVenta.items || ultimaVenta.ventaItems || ultimaVenta.ventas || []
+              ).map((it, i) => {
+                // it puede ser {id_producto,cantidad,precio_unitario,nombre,...} según respuesta
+                const item = it;
+                const nombre = (item.nombre) ? item.nombre : (productos.find(p => p.id_producto === Number(item.id_producto))?.nombre || item.id_producto);
+                const cantidad = item.cantidad || item.cantidad_vendida || item.cantidad_vendida === 0 ? (item.cantidad || item.cantidad_vendida) : '';
+                const precio = item.precio_unitario || item.precio_unitario === 0 ? item.precio_unitario : '';
+                return (
+                  <tr key={i}>
+                    <td>{nombre}</td>
+                    <td>{cantidad}</td>
+                    <td>{precio}</td>
+                    <td>{(Number(cantidad) * Number(precio) || 0).toFixed(2)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ textAlign: 'right', fontWeight: 'bold', marginTop: 8 }}>
+            Total: {(() => {
+              if (ultimaVenta.venta && ultimaVenta.venta.total_venta !== undefined) return Number(ultimaVenta.venta.total_venta).toFixed(2);
+              if (ultimaVenta.total_venta !== undefined) return Number(ultimaVenta.total_venta).toFixed(2);
+              // calcular sumatoria
+              const rows = ultimaVenta.items || ultimaVenta.ventas || [];
+              const sum = rows.reduce((s, it) => s + (Number(it.subtotal || (it.cantidad * it.precio_unitario) || (it.cantidad_vendida * it.precio_unitario)) || 0), 0);
+              return sum.toFixed(2);
+            })()}
+          </div>
+        </div>
+      )}
+
       {mostrarStock && (
         <div style={{ marginBottom: 24 }}>
           <h3>Stock de Productos</h3>
