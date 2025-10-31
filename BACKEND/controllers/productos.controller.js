@@ -6,6 +6,7 @@ const obtenerProductos = async (req, res) => {
         const [productos] = await pool.query("SELECT * FROM productos");
         res.json(productos);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -35,6 +36,38 @@ const crearProducto = async (req, res) => {
 const eliminarProducto = async (req, res) => {
     try {
         const { id } = req.params;
+        // Verificar si existen detalles de venta asociados al producto
+        let totalDetalle = 0;
+        let totalVentas = 0;
+        try {
+            const [rows] = await pool.query("SELECT COUNT(*) AS total FROM detalle_ventas WHERE id_producto = ?", [id]);
+            totalDetalle = rows[0].total || 0;
+        } catch (err) {
+            if (err && err.code === 'ER_NO_SUCH_TABLE') {
+                console.warn('Tabla detalle_ventas no existe, asumiendo totalDetalle=0');
+                totalDetalle = 0;
+            } else {
+                throw err;
+            }
+        }
+
+        try {
+            const [rowsV] = await pool.query("SELECT COUNT(*) AS total FROM ventas WHERE id_producto = ?", [id]);
+            totalVentas = rowsV[0].total || 0;
+        } catch (err) {
+            if (err && err.code === 'ER_NO_SUCH_TABLE') {
+                console.warn('Tabla ventas no existe, asumiendo totalVentas=0');
+                totalVentas = 0;
+            } else {
+                throw err;
+            }
+        }
+
+        const total = Number(totalDetalle) + Number(totalVentas);
+        if (total > 0) {
+            return res.status(400).json({ error: "Producto tiene ventas asociadas y no puede ser eliminado" });
+        }
+
         const query = "DELETE FROM productos WHERE id_producto = ?";
         const [result] = await pool.query(query, [id]);
         if (result.affectedRows === 0) {

@@ -37,8 +37,48 @@ const eliminarDetalleVenta = async (req, res) => {
         
         res.status(200).json({ mensaje: "Detalle de venta eliminado con éxito" });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: error.message });
     }
 };
 
-module.exports = { obtenerDetallesVentas, crearDetalleVenta, eliminarDetalleVenta };
+// Verificar si existen detalles de venta para un producto
+const verificarVentasPorProducto = async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Queremos comprobar referencias tanto en detalle_ventas como en ventas
+        let totalDetalle = 0;
+        let totalVentas = 0;
+        try {
+            const [rows] = await pool.query("SELECT COUNT(*) AS total FROM detalle_ventas WHERE id_producto = ?", [id]);
+            totalDetalle = rows[0].total || 0;
+        } catch (err) {
+            if (err && err.code === 'ER_NO_SUCH_TABLE') {
+                console.warn('Tabla detalle_ventas no existe, asumiendo totalDetalle=0');
+                totalDetalle = 0;
+            } else {
+                throw err;
+            }
+        }
+
+        try {
+            const [rowsV] = await pool.query("SELECT COUNT(*) AS total FROM ventas WHERE id_producto = ?", [id]);
+            totalVentas = rowsV[0].total || 0;
+        } catch (err) {
+            if (err && err.code === 'ER_NO_SUCH_TABLE') {
+                console.warn('Tabla ventas no existe, asumiendo totalVentas=0');
+                totalVentas = 0;
+            } else {
+                throw err;
+            }
+        }
+
+        const total = Number(totalDetalle) + Number(totalVentas);
+        return res.json({ total });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+module.exports = { obtenerDetallesVentas, crearDetalleVenta, eliminarDetalleVenta, verificarVentasPorProducto };

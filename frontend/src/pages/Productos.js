@@ -15,6 +15,7 @@ function Productos() {
   });
   const [editId, setEditId] = useState(null);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   // Trae productos de la tabla productos
   const fetchProductos = async () => {
@@ -93,8 +94,70 @@ function Productos() {
 
   // Eliminar producto
   const handleDelete = async (id) => {
-    await fetch(`http://localhost:3000/api/productos/${id}`, { method: "DELETE" });
-    fetchProductos();
+    setError("");
+    setMessage("");
+
+    // Buscar detalles de ventas y revisar si hay ventas asociadas a este producto
+    try {
+      const detallesRes = await fetch(`http://localhost:3000/api/detalle_ventas/producto/${id}`);
+      if (!detallesRes.ok) {
+        const errText = await detallesRes.text().catch(() => "");
+        throw new Error(`Error al consultar ventas del producto: ${detallesRes.status} ${errText}`);
+      }
+      const detalles = await detallesRes.json();
+      const tieneVenta = detalles.total && Number(detalles.total) > 0;
+
+      if (tieneVenta) {
+        // Si tiene ventas, no se permite eliminar. Preguntar al usuario si desea dejar stock en 0
+        const confirmar = window.confirm(
+          "Este producto tiene ventas asociadas y no puede ser eliminado. ¿Deseas establecer su stock a 0 en su lugar?"
+        );
+        if (!confirmar) return;
+
+        // Obtener producto actual desde el state para no sobrescribir campos
+        const producto = productos.find(p => String(p.id_producto) === String(id));
+        if (!producto) {
+          setError("No se encontró el producto para actualizar el stock.");
+          return;
+        }
+
+        const body = {
+          nombre: producto.nombre,
+          descripcion: producto.descripcion,
+          categoria: producto.categoria,
+          precio_compra: producto.precio_compra,
+          precio_venta: producto.precio_venta,
+          stock: 0,
+          id_proveedor: producto.id_proveedor,
+          fecha_vencimiento: producto.fecha_vencimiento,
+        };
+
+        await fetch(`http://localhost:3000/api/productos/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
+        setMessage("El producto tiene ventas asociadas: se actualizó el stock a 0 en lugar de eliminarlo.");
+        await fetchProductos();
+        return;
+      }
+
+      // Si no tiene ventas, se puede eliminar normalmente (pedir confirmación)
+      const confirmarEliminar = window.confirm("¿Estás seguro de eliminar este producto?");
+      if (!confirmarEliminar) return;
+
+      const delRes = await fetch(`http://localhost:3000/api/productos/${id}`, { method: "DELETE" });
+      if (!delRes.ok) {
+        const data = await delRes.json().catch(() => ({}));
+        setError(data.error || `Error al eliminar (status ${delRes.status})`);
+        return;
+      }
+      setMessage("Producto eliminado correctamente.");
+      await fetchProductos();
+    } catch (err) {
+      setError("Error al procesar la solicitud: " + (err.message || err));
+    }
   };
 
   // Mostrar nombre del proveedor en la tabla
@@ -187,7 +250,8 @@ function Productos() {
           </button>
         )}
       </form>
-      {error && <div style={{ color: "red", marginBottom: 10 }}>{error}</div>}
+  {error && <div style={{ color: "red", marginBottom: 10 }}>{error}</div>}
+  {message && <div style={{ color: "#0a6a0a", background: "#e6f4ea", padding: 8, borderRadius: 4, marginBottom: 10 }}>{message}</div>}
       <table border="1" cellPadding="8">
         <thead>
           <tr>
