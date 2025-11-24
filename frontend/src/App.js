@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from './components/Login';
+import Register from './pages/register';
 import Sidebar from "./components/Sidebar";
 import Proveedores from "./pages/Proveedores";
 import Clientes from "./pages/Clientes";
@@ -41,12 +42,8 @@ function App() {
     return (
       <BrowserRouter>
         <Routes>
-          <Route
-            path="/"
-            element={
-              <Login onLogin={handleLogin} />
-            }
-          />
+          <Route path="/" element={<Login onLogin={handleLogin} />} />
+          <Route path="/register" element={<Register />} />
         </Routes>
       </BrowserRouter>
     );

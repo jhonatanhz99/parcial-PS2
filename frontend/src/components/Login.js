@@ -136,30 +136,10 @@ function Login({ onLogin, onShowRegister, onShowRecover }) {
             {mensaje}
           </div>
         )}
-        {/* Elimina este bloque para quitar los botones de registro y recuperar */}
-        {/* 
         <div style={{ marginTop: 18, textAlign: "center" }}>
           <button
             type="button"
-            onClick={onShowRecover}
-            style={{
-              color: "#00e1ff",
-              fontWeight: 600,
-              textDecoration: "underline",
-              marginRight: 10,
-              cursor: "pointer",
-              background: "none",
-              border: "none",
-              padding: 0,
-              fontSize: "inherit"
-            }}
-          >
-            ¿Olvidaste tu contraseña?
-          </button>
-          <br />
-          <button
-            type="button"
-            onClick={onShowRegister}
+            onClick={() => (window.location.href = '/register')}
             style={{
               color: "#00e1ff",
               fontWeight: 600,
@@ -171,10 +151,9 @@ function Login({ onLogin, onShowRegister, onShowRecover }) {
               fontSize: "inherit"
             }}
           >
-            Regístrate
+            ¿No tienes cuenta? Regístrate
           </button>
         </div>
-        */}
       </form>
     </div>
   );
