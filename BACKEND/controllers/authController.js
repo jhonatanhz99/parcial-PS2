@@ -13,8 +13,8 @@ exports.login = async (req, res) => {
         let [rows] = await db.query('SELECT * FROM administradores WHERE usuario = ?', [usuario]);
         let rol = "admin";
         if (rows.length === 0) {
-            // Si no está en administradores, busca en usuarios por el campo 'correo'
-            [rows] = await db.query('SELECT * FROM usuario WHERE correo = ?', [usuario]);
+            // Si no está en administradores, busca en usuarios por el campo 'email'
+            [rows] = await db.query('SELECT * FROM usuario WHERE email = ?', [usuario]);
             rol = "usuario";
         }
 
@@ -23,8 +23,25 @@ exports.login = async (req, res) => {
         }
 
         const user = rows[0];
-        const hash = user.contrasena;
-        const match = await bcrypt.compare(contrasena, user.contrasena);
+        // Columna real puede ser 'contrasena' (admin) o 'contraseña' (usuario)
+        const passwordHash = user.contrasena || user.contraseña;
+        
+        if (!passwordHash) {
+            console.error('ERROR EN LOGIN: passwordHash no encontrado en usuario:', user);
+            return res.status(400).json({ success: false, message: 'Usuario o contraseña incorrectos.' });
+        }
+
+        // Manejo compatible: contraseñas hasheadas (nuevas) y en texto plano (antiguas)
+        let match = false;
+        try {
+            // Intenta bcrypt.compare (para contraseñas hasheadas)
+            match = await bcrypt.compare(contrasena, passwordHash);
+        } catch (bcryptErr) {
+            // Si bcrypt falla, compara como texto plano (para usuarios antiguos)
+            console.warn('Fallback a comparación de texto plano para usuario:', user.email);
+            match = contrasena === passwordHash;
+        }
+
         if (!match) {
             return res.status(400).json({ success: false, message: 'Usuario o contraseña incorrectos.' });
         }
@@ -39,14 +56,15 @@ exports.login = async (req, res) => {
             token,
             usuario: {
                 id: user.id || user.id_usuario,
-                nombre: user.nombre || user.usuario,
-                correo: user.correo || user.usuario,
+                nombre: user.nombre_usuario || user.nombre || user.usuario,
+                correo: user.email || user.correo || user.usuario,
                 rol
             }
         });
     } catch (err) {
-        console.error('ERROR EN LOGIN:', err);
-        res.status(500).json({ success: false, message: 'Error en el servidor.' });
+        console.error('ERROR EN LOGIN:', err && err.message);
+        if (err && err.stack) console.error(err.stack);
+        res.status(500).json({ success: false, message: 'Error en el servidor.', error: err && err.message });
     }
 };
 
